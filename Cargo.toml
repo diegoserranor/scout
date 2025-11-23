@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 cidr = "0.3.1"
 clap = { version = "4.5.46", features = ["derive"] }
+getifs = "0.4.0"
 indicatif = "0.18.0"
 num_cpus = "1.17.0"
 tokio = { version = "1", features = ["full"] }

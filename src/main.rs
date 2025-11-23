@@ -1,4 +1,5 @@
 use std::error::Error;
+use getifs::{local_ipv4_addrs};
 use tokio::time::Instant;
 
 mod cli;
@@ -13,7 +14,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     match cli.command {
         Commands::Probe { target, start, end } => run_probe(target, start, end).await?,
-        Commands::Networks => todo!(),
+        Commands::Networks => run_networks(),
     }
 
     Ok(())
@@ -64,5 +65,12 @@ async fn run_probe(
     println!("Elapsed time: {:?}", elapsed);
 
     Ok(())
+}
+
+fn run_networks() {
+    let addresses = local_ipv4_addrs().unwrap();
+    for address in addresses {
+        println!("{address}");
+    }
 }
 

@@ -16,8 +16,9 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Run a TCP scan for a target host over a range of ports
     Probe {
-        /// Target host (IP, domain, or CIDR)
+        /// Target host IP or CIDR (e.g. 192.168.66.0/22)
         target: String,
 
         /// Starting port (default: 1)
@@ -26,6 +27,8 @@ pub enum Commands {
         /// Ending port (default: 1024)
         end: Option<u16>,
     },
+
+    /// Get a list of potential target networks your device is part of
     Networks,
 }
 
