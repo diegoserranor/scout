@@ -1,39 +1,32 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use indicatif::ProgressBar;
 
-/// Fast network discovery tool
+pub fn parse_args() -> Cli {
+    Cli::parse()
+}
+
+/// Local host discovery and TCP probing tool
 #[derive(Parser, Debug)]
+#[command(name = "scout")]
 #[command(version, about, long_about = None)]
-struct Cli {
-    /// Target host (IP, domain, or CIDR)
-    target: String,
-
-    /// Starting port (default: 1)
-    start: Option<u16>,
-
-    /// Ending port (default: 1024)
-    end: Option<u16>,
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Commands,
 }
 
-pub struct Args {
-    pub target: String,
-    pub start: u16,
-    pub end: u16,
-}
+#[derive(Subcommand, Debug)]
+pub enum Commands {
+    Probe {
+        /// Target host (IP, domain, or CIDR)
+        target: String,
 
-pub fn parse_args() -> Args {
-    let cli = Cli::parse();
+        /// Starting port (default: 1)
+        start: Option<u16>,
 
-    let target = cli.target;
-    let start = cli.start.unwrap_or(1);
-    let end = cli.end.unwrap_or(1024);
-
-    if start > end {
-        eprintln!("start_port must be <= end_port");
-        std::process::exit(1);
-    }
-
-    Args { target, start, end }
+        /// Ending port (default: 1024)
+        end: Option<u16>,
+    },
+    Networks,
 }
 
 pub struct Console {
@@ -49,3 +42,4 @@ pub fn console(total: u64) -> Console {
 pub fn progress(console: &Console) {
     console.bar.inc(1);
 }
+
