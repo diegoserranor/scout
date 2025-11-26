@@ -671,6 +671,7 @@ dependencies = [
  "getifs",
  "indicatif",
  "num_cpus",
+ "smallvec-wrapper",
  "tokio",
 ]
 

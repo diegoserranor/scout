@@ -1,5 +1,3 @@
-use num_cpus;
-
 /// Compute the number of concurrent tasks based on the number of CPUs.
 /// - x64 the number of CPUs; generous concurrency for I/O
 /// - cap is 4096
