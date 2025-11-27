@@ -11,3 +11,4 @@ indicatif = "0.18.0"
 num_cpus = "1.17.0"
 smallvec-wrapper = "0.3.0"
 tokio = { version = "1", features = ["full"] }
+comfy-table = "7.1.1"

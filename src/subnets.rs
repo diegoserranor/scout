@@ -15,6 +15,7 @@ pub fn print(subnets: &[Ifv4Net]) {
         return;
     }
 
+    println!("Local IPv4 subnets:");
     for subnet in subnets {
         println!("- {}", subnet.net());
     }

@@ -44,13 +44,13 @@ pub async fn ttl(ip: Ipv4Addr) -> Option<String> {
         _ => (255, "likely network gear/other"),
     };
     let hops = base.saturating_sub(ttl);
-    let hop_hint = if hops == 0 {
-        "same segment".to_string()
+    let hint = if hops == 0 {
+        os_guess.to_string()
     } else {
-        format!("{hops} hop(s) away")
+        format!("{os_guess}, {hops} hop(s) away")
     };
 
-    Some(format!("{ttl} ({os_guess}, {hop_hint})"))
+    Some(format!("{ttl} ({hint})"))
 }
 
 /// Attempt to grab banners from HTTP-like ports, then SSH.

@@ -12,7 +12,7 @@ mod subnets;
 use crate::cli::Commands;
 
 // Modest set of TCP ports commonly exposed by consumer devices/services.
-const DISCOVERY_PORTS: &[u16] = &[22, 23, 53, 80, 443, 631, 8000, 8080, 8443, 139, 445];
+const DISCOVERY_PORTS: &[u16] = &[22, 23, 53, 80, 139, 443, 445, 631, 8000, 8080, 8443];
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -27,6 +27,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Scan a range of ports with a TCP probe for a target.
+/// The target can be an IP address (e.g. 192.168.55.42) or a CIDR block (e.g. 192.168.55.0/24).
 async fn run_probe(
     target: String,
     start: Option<u16>,
@@ -48,7 +50,7 @@ async fn run_probe(
     let scan_items = scan::build_target_scan_items(&target, start, end)?;
     let mut scanner = scan::spawn(scan_items, concurrency, channel_size).await?;
 
-    let console = cli::console(scanner.total);
+    let console = cli::console_with_label(scanner.total, "Probing targets...", "targets");
 
     let mut open_ports: Vec<scan::ScanItem> = Vec::new();
     while let Some((target, port, open)) = scanner.rx.recv().await {
@@ -58,17 +60,30 @@ async fn run_probe(
         }
     }
 
-    if !open_ports.is_empty() {
-        println!("Open ports:");
-        for (target, port) in open_ports {
-            let open = format!("{}:{}", target, port);
-            println!("{}", open);
-        }
-    } else {
+    if open_ports.is_empty() {
         println!("No ports found");
+        return Ok(());
     }
 
+    let mut grouped: BTreeMap<Ipv4Addr, Vec<u16>> = BTreeMap::new();
+    for (target, port) in open_ports {
+        grouped.entry(target).or_default().push(port);
+    }
+
+    for ports in grouped.values_mut() {
+        ports.sort_unstable();
+        ports.dedup();
+    }
+
+    let mut flattened: Vec<(Ipv4Addr, Vec<u16>)> = grouped.into_iter().collect();
+    flattened.sort_by_key(|(ip, _)| *ip);
+
+    let table = cli::build_probe_table(&flattened);
+    println!();
+    println!("\n{table}");
+
     let elapsed = now.elapsed();
+    println!();
     println!("Elapsed time: {:?}", elapsed);
 
     Ok(())
@@ -81,15 +96,12 @@ fn run_networks() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Discover and fingerprint local hosts:
-/// 1) Enumerate local IPv4 subnets, build a TCP scan list over `DISCOVERY_PORTS` for every host except our own IP.
-/// 2) Run a bounded TCP connect scan to find hosts with responsive ports.
-/// 3) For each live host (TCP-open), fingerprint in order:
-///    - TTL probe (ping) for OS family and hop-distance hint.
-///    - Service probes on open ports: HTTP first (80/443/8000/8080/8443), then SSH (22); collect every banner that responds.
+/// Discover and fingerprint local hosts found in IPv4 subnets.
+/// Fingerprinting is mainly done with TCP probing by checking TTL, HTTP banners, and SSH banners.
 async fn run_default() -> Result<(), Box<dyn Error>> {
     let nets = subnets::get()?;
     subnets::print(&nets);
+    println!();
 
     let concurrency = limits::compute_concurrency();
     let channel_size = limits::compute_channel_size(concurrency);
@@ -107,7 +119,7 @@ async fn run_default() -> Result<(), Box<dyn Error>> {
 
     let scan_items = scan::build_scan_items(hosts, DISCOVERY_PORTS.iter().copied());
     let mut scanner = scan::spawn(scan_items, concurrency, channel_size).await?;
-    let console = cli::console_with_label(scanner.total, "Finding live hosts");
+    let console = cli::console_with_label(scanner.total, "Finding live hosts...", "targets");
 
     let mut open_hosts: HashMap<Ipv4Addr, Vec<u16>> = HashMap::new();
     while let Some((ip, port, open)) = scanner.rx.recv().await {
@@ -131,7 +143,7 @@ async fn run_default() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let fp_console = cli::console_with_label(hosts.len() as u64, "Fingerprinting");
+    let fp_console = cli::console_with_label(hosts.len() as u64, "Fingerprinting...", "hosts");
     let mut results: Vec<(Ipv4Addr, Vec<u16>, fingerprint::HostFingerprint)> = Vec::new();
     for (ip, ports) in hosts {
         let fp = fingerprint::host(ip, &ports).await;
@@ -140,18 +152,11 @@ async fn run_default() -> Result<(), Box<dyn Error>> {
     }
     cli::finish(&fp_console);
 
-    println!("\n\nLive hosts (open discovery ports):");
-    for (ip, ports, fp) in results {
-        println!("{ip} -> ports {:?}", ports);
-        if let Some(ttl_guess) = fp.ttl_guess {
-            println!("  ttl_fingerprint: {ttl_guess}");
-        }
-        if !fp.services.is_empty() {
-            for service in fp.services {
-                println!("  service_fingerprint: {service}");
-            }
-        }
-    }
+    let table = cli::build_results_table(&results);
+
+    println!();
+    println!("\n{table}");
 
     Ok(())
 }
+
