@@ -3,6 +3,9 @@ Network discovery tool
 
 ## Usage
 ```bash
+# Scan available IPv4 subnets and fingerprint hosts
+cargo run
+
 # Scan the 192.168.1.0/24 subnet from port 1 to 100
 cargo run -- probe 192.168.1.0/24 1 100
 

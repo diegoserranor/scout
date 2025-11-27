@@ -34,6 +34,8 @@ async fn run_probe(
     start: Option<u16>,
     end: Option<u16>,
 ) -> Result<(), Box<dyn Error>> {
+    let now = Instant::now();
+
     let start = start.unwrap_or(1);
     let end = end.unwrap_or(1024);
 
@@ -44,8 +46,6 @@ async fn run_probe(
 
     let concurrency = limits::compute_concurrency();
     let channel_size = limits::compute_channel_size(concurrency);
-
-    let now = Instant::now();
 
     let scan_items = scan::build_target_scan_items(&target, start, end)?;
     let mut scanner = scan::spawn(scan_items, concurrency, channel_size).await?;
@@ -99,6 +99,8 @@ fn run_networks() -> Result<(), Box<dyn Error>> {
 /// Discover and fingerprint local hosts found in IPv4 subnets.
 /// Fingerprinting is mainly done with TCP probing by checking TTL, HTTP banners, and SSH banners.
 async fn run_default() -> Result<(), Box<dyn Error>> {
+    let now = Instant::now();
+
     let nets = subnets::get()?;
     subnets::print(&nets);
     println!();
@@ -156,6 +158,10 @@ async fn run_default() -> Result<(), Box<dyn Error>> {
 
     println!();
     println!("\n{table}");
+
+    let elapsed = now.elapsed();
+    println!();
+    println!("Elapsed time: {:?}", elapsed);
 
     Ok(())
 }
