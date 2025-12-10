@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     cli::console,
-    scan::{fingerprint, limits, scanner, subnets},
+    scan::{fingerprint, scanner, subnets},
 };
 
 // Modest set of TCP ports commonly exposed by consumer devices/services.
@@ -19,9 +19,6 @@ pub async fn default() -> Result<(), Box<dyn Error>> {
     subnets::print(&nets);
     println!();
 
-    let concurrency = limits::compute_concurrency();
-    let channel_size = limits::compute_channel_size(concurrency);
-
     let mut hosts = Vec::new();
     for subnet in &nets {
         let local_ip = subnet.addr();
@@ -33,12 +30,18 @@ pub async fn default() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    let scan_items = scanner::build_scan_items(hosts, DISCOVERY_PORTS.iter().copied());
-    let mut scanner = scanner::spawn(scan_items, concurrency, channel_size).await?;
-    let console = console::console_with_label(scanner.total, "Finding live hosts...", "targets");
+    let scanner = scanner::Scanner::build(hosts, DISCOVERY_PORTS.iter().copied());
+
+    let console = console::console_with_label(
+        scanner.targets.len().try_into().unwrap(),
+        "Finding live hosts...",
+        "targets",
+    );
+
+    let mut rx = scanner.spawn();
 
     let mut open_hosts: HashMap<Ipv4Addr, Vec<u16>> = HashMap::new();
-    while let Some((ip, port, open)) = scanner.rx.recv().await {
+    while let Some((ip, port, open)) = rx.recv().await {
         console::progress(&console);
         if open {
             open_hosts.entry(ip).or_default().push(port);

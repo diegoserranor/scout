@@ -3,8 +3,10 @@ use std::error::Error;
 use std::net::Ipv4Addr;
 use std::time::Instant;
 
+use cidr::Ipv4Cidr;
+
 use crate::cli::console;
-use crate::scan::{limits, scanner};
+use crate::scan::{self, scanner};
 
 /// Scan a range of ports with a TCP probe for a target.
 /// The target can be an IP address (e.g. 192.168.55.42) or a CIDR block (e.g. 192.168.55.0/24).
@@ -21,18 +23,31 @@ pub async fn probe(
         std::process::exit(1);
     }
 
-    let concurrency = limits::compute_concurrency();
-    let channel_size = limits::compute_channel_size(concurrency);
+    let ports = start..=end;
+
+    let hosts: Vec<Ipv4Addr>;
+    if let Ok(ip) = target.parse::<Ipv4Addr>() {
+        hosts = vec![ip];
+    } else if let Ok(cidr) = target.parse::<Ipv4Cidr>() {
+        hosts = cidr.iter().map(|ip| ip.address()).collect();
+    } else {
+        return Err("Target not supported; supply IP address or CIDR".into());
+    }
 
     let now = Instant::now();
 
-    let scan_items = scanner::build_target_scan_items(&target, start, end)?;
-    let mut scanner = scanner::spawn(scan_items, concurrency, channel_size).await?;
+    let scanner = scan::scanner::Scanner::build(hosts, ports);
 
-    let console = console::console_with_label(scanner.total, "Probing targets...", "targets");
+    let console = console::console_with_label(
+        scanner.targets.len().try_into().unwrap(),
+        "Probing targets...",
+        "targets",
+    );
 
-    let mut open_ports: Vec<scanner::ScanItem> = Vec::new();
-    while let Some((target, port, open)) = scanner.rx.recv().await {
+    let mut rx = scanner.spawn();
+
+    let mut open_ports: Vec<scanner::ScanTarget> = Vec::new();
+    while let Some((target, port, open)) = rx.recv().await {
         console::progress(&console);
         if open {
             open_ports.push((target, port));

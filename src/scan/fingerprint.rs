@@ -1,5 +1,8 @@
+use super::tcp;
 use std::net::Ipv4Addr;
-use tokio::process::Command;
+use tokio::{process::Command, time::Duration};
+
+const SERVICE_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub struct HostFingerprint {
     pub ttl_guess: Option<String>,
@@ -71,14 +74,14 @@ pub async fn services(ip: Ipv4Addr, open_ports: &[u16]) -> Vec<String> {
 }
 
 pub async fn http_banner(ip: Ipv4Addr, port: u16) -> Option<String> {
-    let mut stream = super::scanner::connect_with_timeout((ip, port)).await?;
+    let mut stream = tcp::connect_with_timeout((ip, port), SERVICE_CONNECT_TIMEOUT).await?;
 
     let request =
         format!("HEAD / HTTP/1.0\r\nHost: {ip}\r\nUser-Agent: scout\r\nConnection: close\r\n\r\n");
-    super::scanner::write_with_timeout(&mut stream, request.as_bytes()).await?;
+    tcp::write_with_timeout(&mut stream, request.as_bytes()).await?;
 
     let mut buf = [0u8; 2048];
-    let read = super::scanner::read_with_timeout(&mut stream, &mut buf).await?;
+    let read = tcp::read_with_timeout(&mut stream, &mut buf).await?;
     if read == 0 {
         return None;
     }
@@ -97,10 +100,10 @@ pub async fn http_banner(ip: Ipv4Addr, port: u16) -> Option<String> {
 }
 
 pub async fn ssh_banner(ip: Ipv4Addr, port: u16) -> Option<String> {
-    let mut stream = super::scanner::connect_with_timeout((ip, port)).await?;
+    let mut stream = tcp::connect_with_timeout((ip, port), SERVICE_CONNECT_TIMEOUT).await?;
 
     let mut buf = [0u8; 512];
-    let read = super::scanner::read_with_timeout(&mut stream, &mut buf).await?;
+    let read = tcp::read_with_timeout(&mut stream, &mut buf).await?;
     if read == 0 {
         return None;
     }
