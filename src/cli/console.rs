@@ -1,46 +1,14 @@
-use crate::fingerprint::HostFingerprint;
-use clap::{Parser, Subcommand};
 use comfy_table::{ContentArrangement, Table, modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::net::Ipv4Addr;
 
-pub const OUTPUT_WIDTH: u16 = 100;
-
-pub fn parse_args() -> Cli {
-    Cli::parse()
-}
-
-/// Local host discovery and TCP probing tool
-#[derive(Parser, Debug)]
-#[command(name = "scout")]
-#[command(version, about, long_about = None)]
-pub struct Cli {
-    #[command(subcommand)]
-    pub command: Option<Commands>,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum Commands {
-    /// Run a TCP scan for a target host over a range of ports
-    Probe {
-        /// Target host IP or CIDR (e.g. 192.168.66.0/22)
-        target: String,
-
-        /// Starting port (default: 1)
-        start: Option<u16>,
-
-        /// Ending port (default: 1024)
-        end: Option<u16>,
-    },
-
-    /// Get a list of potential target networks your device is part of
-    Networks,
-}
+use crate::scan::fingerprint::HostFingerprint;
 
 pub struct Console {
     bar: ProgressBar,
 }
 
+pub const OUTPUT_WIDTH: u16 = 100;
 const PROGRESS_LABEL_WIDTH: usize = 21;
 
 pub fn console_with_label(total: u64, label: &str, suffix: &str) -> Console {
@@ -142,4 +110,3 @@ fn discovery_service_name(port: u16) -> Option<&'static str> {
         _ => None,
     }
 }
-
