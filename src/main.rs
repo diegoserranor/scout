@@ -1,8 +1,10 @@
 use std::error::Error;
 
 mod cli;
+mod jobs;
 mod modes;
-mod scan;
+mod scans;
+mod subnets;
 
 use crate::cli::{args::Commands, args::parse_args};
 
