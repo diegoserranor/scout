@@ -1,22 +1,16 @@
 use std::error::Error;
 
 mod cli;
+mod core;
 mod jobs;
-mod modes;
 mod scans;
 mod subnets;
 
-use crate::cli::{args::Commands, args::parse_args};
+use crate::cli::args::parse_args;
+use crate::cli::run::run;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let cli = parse_args();
-
-    match cli.command {
-        Some(Commands::Probe { target, start, end }) => modes::probe(target, start, end).await?,
-        Some(Commands::Networks) => modes::networks()?,
-        None => modes::default().await?,
-    }
-
-    Ok(())
+    run(cli).await
 }

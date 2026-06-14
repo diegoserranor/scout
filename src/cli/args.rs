@@ -15,18 +15,17 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Run a TCP scan for a target host over a range of ports
-    Probe {
-        /// Target host IP or CIDR (e.g. 192.168.66.0/22)
+    /// Discover live hosts on your local networks
+    Discover,
+
+    /// Inspect a target's open ports, TTL, and services
+    Inspect {
+        /// Target host IP or CIDR (e.g. 192.168.1.0/24)
         target: String,
 
-        /// Starting port (default: 1)
-        start: Option<u16>,
-
-        /// Ending port (default: 1024)
-        end: Option<u16>,
+        /// Ports to scan: web | common | all | a range (1-1024) | a list (22,80,443).
+        /// Defaults to the common set.
+        #[arg(short, long)]
+        ports: Option<String>,
     },
-
-    /// Get a list of potential target networks your device is part of
-    Networks,
 }
