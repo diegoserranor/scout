@@ -10,8 +10,8 @@ use comfy_table::modifiers::UTF8_ROUND_CORNERS;
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{ContentArrangement, Table};
 
-use crate::cli::args::{Cli, Commands};
-use crate::cli::console::{self, OUTPUT_WIDTH};
+use super::args::{Cli, Commands};
+use super::console::{self, OUTPUT_WIDTH};
 use crate::core::{self, Host, HostReport, PortSpec, Service};
 
 /// Dispatch the parsed CLI to the appropriate stage.
