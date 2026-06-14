@@ -15,6 +15,12 @@ use crate::subnets;
 /// later only as a TTL signal during Inspect.
 const LIVENESS_PORTS: &[u16] = &[22, 80, 443];
 
+/// Subnets wider than this are skipped during Discover: exhaustively TCP-touching
+/// a /16 (65k hosts) is dominated by dead address space (e.g. Docker bridges) and
+/// isn't what Discover is for. Skips are intentionally silent; user-targeted
+/// discovery comes later. Narrow or widen to taste.
+const MIN_SUBNET_PREFIX: u8 = 22; // keep /22 and narrower
+
 /// Run the Discover stage: enumerate local subnets, expand them into candidate
 /// hosts, and return those that respond to a TCP-touch liveness sweep.
 pub async fn discover() -> Result<Vec<Host>, Box<dyn Error>> {
@@ -28,6 +34,9 @@ pub async fn discover() -> Result<Vec<Host>, Box<dyn Error>> {
 fn candidate_hosts(nets: &[Ifv4Net]) -> Vec<Host> {
     let mut hosts = Vec::<Host>::new();
     for iface in nets {
+        if iface.net().prefix_len() < MIN_SUBNET_PREFIX {
+            continue;
+        }
         let local_ip = iface.addr();
         for host in iface.net().hosts() {
             if host == local_ip {
