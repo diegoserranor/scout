@@ -1,38 +1,17 @@
 use super::tcp;
-use crate::jobs;
 use std::net::Ipv4Addr;
-use tokio::{sync::mpsc, time::Duration};
+use tokio::time::Duration;
 
 const SERVICE_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
-pub type ServiceResult = Option<(Ipv4Addr, u16, String)>;
-
-pub type ServiceTarget = (Ipv4Addr, u16);
-
-pub struct ServiceScan {
-    pub targets: Vec<ServiceTarget>,
-}
-
-impl ServiceScan {
-    pub fn build(targets: Vec<ServiceTarget>) -> Self {
-        ServiceScan { targets }
-    }
-
-    pub fn spawn(self) -> mpsc::Receiver<ServiceResult> {
-        let runner = jobs::Runner::<ServiceTarget, ServiceResult>::build(self.targets);
-        runner.spawn(|(host, port)| async move { services(host, port).await })
-    }
-}
-
-/// Attempt to grab banners from HTTP-like ports, then SSH.
-async fn services(ip: Ipv4Addr, port: u16) -> ServiceResult {
-    let banner = match port {
+/// Attempt to grab a banner from a known service port (HTTP-like ports, then
+/// SSH); `None` for unsupported or silent ports.
+pub async fn probe(ip: Ipv4Addr, port: u16) -> Option<String> {
+    match port {
         80 | 8000 | 8080 | 8443 | 443 => http_banner(ip, port).await,
         22 => ssh_banner(ip, port).await,
         _ => None,
-    };
-
-    banner.map(|banner| (ip, port, banner))
+    }
 }
 
 async fn http_banner(ip: Ipv4Addr, port: u16) -> Option<String> {

@@ -1,5 +1,6 @@
 //! CLI front-end: dispatch subcommands to the core stages and render the results.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::net::Ipv4Addr;
 use std::time::Instant;
@@ -58,9 +59,15 @@ async fn inspect(target: String, ports: Option<String>) -> Result<(), Box<dyn Er
     let hosts = parse_target(&target)?;
     let spec = parse_port_spec(ports)?;
     let plan = core::scope(hosts, spec)?;
+    let mut rx = core::inspect(plan)?;
 
+    // Each message is a host's latest snapshot; key by host so updates coalesce.
     let bar = console::spinner("Inspecting targets...");
-    let reports = core::inspect(plan).await?;
+    let mut reports: BTreeMap<Ipv4Addr, HostReport> = BTreeMap::new();
+    while let Some(report) = rx.recv().await {
+        reports.insert(report.host, report);
+        bar.set_message(format!("Inspecting targets... {} host(s) responding", reports.len()));
+    }
     bar.finish_and_clear();
 
     if reports.is_empty() {
@@ -68,6 +75,7 @@ async fn inspect(target: String, ports: Option<String>) -> Result<(), Box<dyn Er
         return Ok(());
     }
 
+    let reports: Vec<HostReport> = reports.into_values().collect();
     println!("\n{}", report_table(&reports));
     println!("\nElapsed time: {:?}", now.elapsed());
     Ok(())

@@ -6,7 +6,6 @@ use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::widgets::TableState;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
 
 use super::ui;
@@ -70,10 +69,11 @@ pub enum Scan {
     Failed(String),
 }
 
-/// State of the inspect run for the selected host.
+/// State of the inspect run for the selected host. Both `Running` and `Done`
+/// carry the latest report snapshot (`None` until the first one arrives; a `Done`
+/// with `None` means the host had no open ports).
 pub enum Inspection {
-    Running,
-    /// Finished; `None` means the host had no open ports.
+    Running(Option<HostReport>),
     Done(Option<HostReport>),
     Failed(String),
 }
@@ -82,6 +82,7 @@ pub enum Inspection {
 enum Action {
     None,
     Inspect { host: Host, spec: PortSpec },
+    CancelInspect,
 }
 
 /// The TUI's mutable state, owned by the event loop.
@@ -112,7 +113,7 @@ impl App {
             preset: 0,
             editing: false,
             port_input: String::new(),
-            inspection: Inspection::Running,
+            inspection: Inspection::Running(None),
             spinner_frame: 0,
             should_quit: false,
         }
@@ -130,8 +131,9 @@ impl App {
             }
         };
 
-        // Inspect runs on demand once the user picks a host + preset.
-        let mut inspect_task: Option<JoinHandle<Result<Option<HostReport>, String>>> = None;
+        // Inspect runs on demand once the user picks a host + preset; core streams
+        // report snapshots back over this receiver while it's set.
+        let mut inspect_rx: Option<mpsc::Receiver<HostReport>> = None;
 
         // crossterm reads are blocking, so pull input on a dedicated thread and
         // forward each event over a channel the loop can select on.
@@ -143,17 +145,14 @@ impl App {
 
             tokio::select! {
                 Some(event) = input.recv() => {
-                    if let Action::Inspect { host, spec } = self.on_event(&event) {
-                        // Abandon any in-flight inspect before starting a new one.
-                        if let Some(task) = inspect_task.take() {
-                            task.abort();
+                    match self.on_event(&event) {
+                        // Replacing/clearing the receiver drops the old one, which
+                        // signals core's coordinator to stop (its sends start failing).
+                        Action::Inspect { host, spec } => {
+                            inspect_rx = self.spawn_inspect(host, spec);
                         }
-                        let targets = vec![host.ip];
-                        inspect_task = Some(tokio::spawn(async move {
-                            let plan = core::scope(targets, spec).map_err(|e| e.to_string())?;
-                            let reports = core::inspect(plan).await.map_err(|e| e.to_string())?;
-                            Ok(reports.into_iter().next())
-                        }));
+                        Action::CancelInspect => inspect_rx = None,
+                        Action::None => {}
                     }
                 }
                 _ = ticker.tick() => self.spinner_frame = self.spinner_frame.wrapping_add(1),
@@ -169,16 +168,20 @@ impl App {
                         }
                     }
                 }
-                result = async { inspect_task.as_mut().unwrap().await }, if inspect_task.is_some() => {
-                    inspect_task = None;
-                    let outcome = match result {
-                        Ok(Ok(report)) => Inspection::Done(report),
-                        Ok(Err(err)) => Inspection::Failed(err),
-                        Err(err) => Inspection::Failed(format!("inspect task failed: {err}")),
-                    };
-                    // Drop the result if the user has already left the Inspect screen.
-                    if self.screen == Screen::Inspect {
-                        self.inspection = outcome;
+                report = async { inspect_rx.as_mut().unwrap().recv().await }, if inspect_rx.is_some() => {
+                    // Ignore late results once the user has left the Inspect screen.
+                    match report {
+                        Some(report) if self.screen == Screen::Inspect => {
+                            self.inspection = Inspection::Running(Some(report));
+                        }
+                        Some(_) => {}
+                        // Channel closed: the scan finished. Settle Running → Done.
+                        None => {
+                            inspect_rx = None;
+                            if let Inspection::Running(report) = &mut self.inspection {
+                                self.inspection = Inspection::Done(report.take());
+                            }
+                        }
                     }
                 }
             }
@@ -208,7 +211,7 @@ impl App {
         match self.screen {
             Screen::Discover => self.on_discover_key(key.code),
             Screen::Scope => return self.on_scope_key(key.code),
-            Screen::Inspect => self.on_inspect_key(key.code),
+            Screen::Inspect => return self.on_inspect_key(key.code),
         }
         Action::None
     }
@@ -283,17 +286,31 @@ impl App {
     fn start_inspect(&mut self, spec: PortSpec) -> Action {
         if let Some(host) = self.target.clone() {
             self.screen = Screen::Inspect;
-            self.inspection = Inspection::Running;
+            self.inspection = Inspection::Running(None);
             return Action::Inspect { host, spec };
         }
         self.screen = Screen::Discover;
         Action::None
     }
 
-    fn on_inspect_key(&mut self, code: KeyCode) {
+    /// Start a streamed inspect for one host, returning the report receiver, or
+    /// recording a setup failure and returning `None`.
+    fn spawn_inspect(&mut self, host: Host, spec: PortSpec) -> Option<mpsc::Receiver<HostReport>> {
+        match core::scope(vec![host.ip], spec).and_then(core::inspect) {
+            Ok(rx) => Some(rx),
+            Err(err) => {
+                self.inspection = Inspection::Failed(err.to_string());
+                None
+            }
+        }
+    }
+
+    fn on_inspect_key(&mut self, code: KeyCode) -> Action {
         if matches!(code, KeyCode::Esc | KeyCode::Backspace) {
             self.screen = Screen::Discover;
+            return Action::CancelInspect;
         }
+        Action::None
     }
 
     /// Record a host streamed in from the discover sweep, selecting the first

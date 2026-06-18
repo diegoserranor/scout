@@ -1,101 +1,147 @@
-//! Inspect stage: probe a scan plan for open ports, TTL, and service banners.
+//! Inspect stage: probe a scan plan and stream a report per host as it fills in.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::net::Ipv4Addr;
+
+use tokio::sync::mpsc;
 
 use super::types::{HostReport, ScanPlan, Service};
 use crate::scans;
 
-/// Run the Inspect stage: scan the plan's host/port pairs, then enrich the live
-/// hosts with a TTL ping and service banners, returning one report per host.
-pub async fn inspect(plan: ScanPlan) -> Result<Vec<HostReport>, Box<dyn Error>> {
+/// Buffer for the stream of report snapshots handed back to the caller.
+const INSPECT_BUFFER: usize = 128;
+
+/// Run the Inspect stage: scan the plan's host/port pairs and stream a
+/// [`HostReport`] snapshot for a host every time it learns something new — its
+/// first open port, its TTL, a service banner. Each message is the host's full
+/// current report, so consumers key by [`HostReport::host`] and keep the latest.
+///
+/// Setup (target expansion) is synchronous so failures surface immediately; the
+/// scan runs in a background coordinator feeding the returned receiver, which
+/// closes once every port has been probed and every enrichment has landed.
+pub fn inspect(plan: ScanPlan) -> Result<mpsc::Receiver<HostReport>, Box<dyn Error>> {
     let ScanPlan { hosts, ports } = plan;
-
-    // Which (host, port) pairs are open.
     let live_targets = scans::live::build_live_targets(hosts, ports)?;
+
+    let (tx, rx) = mpsc::channel(INSPECT_BUFFER);
+    tokio::spawn(coordinate(live_targets, tx));
+    Ok(rx)
+}
+
+/// A result from one of the per-host/per-port enrichment probes.
+enum Enrich {
+    Ttl(Ipv4Addr, Option<u8>),
+    Service(Ipv4Addr, u16, Option<String>),
+}
+
+/// Drive the live sweep, fan out TTL and service probes as open ports surface,
+/// and emit a fresh report snapshot on every change until all work is done.
+async fn coordinate(live_targets: Vec<scans::live::LiveTarget>, tx: mpsc::Sender<HostReport>) {
     let mut live_rx = scans::live::LiveScan::build(live_targets).spawn();
-    let mut open_ports: Vec<(Ipv4Addr, u16)> = Vec::new();
-    while let Some((ip, port, open)) = live_rx.recv().await {
-        if open {
-            open_ports.push((ip, port));
-        }
-    }
+    let (enrich_tx, mut enrich_rx) = mpsc::channel::<Enrich>(INSPECT_BUFFER);
 
-    if open_ports.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // TTL fingerprint: ping each unique live host once.
-    let ttl_targets: Vec<Ipv4Addr> = open_ports
-        .iter()
-        .map(|(ip, _)| *ip)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let mut ttl_rx = scans::ttl::TTLScan::build(ttl_targets).run();
-    let mut ttl_results: Vec<(Ipv4Addr, u8)> = Vec::new();
-    while let Some(result) = ttl_rx.recv().await {
-        if let Some(result) = result {
-            ttl_results.push(result);
-        }
-    }
-
-    // Service banners on the open ports.
-    let mut service_rx = scans::service::ServiceScan::build(open_ports.clone()).spawn();
-    let mut service_results: Vec<(Ipv4Addr, u16, String)> = Vec::new();
-    while let Some(result) = service_rx.recv().await {
-        if let Some(result) = result {
-            service_results.push(result);
-        }
-    }
-
-    Ok(assemble_reports(open_ports, ttl_results, service_results))
-}
-
-/// Fold the per-scan results into one [`HostReport`] per host.
-fn assemble_reports(
-    open_ports: Vec<(Ipv4Addr, u16)>,
-    ttl_results: Vec<(Ipv4Addr, u8)>,
-    service_results: Vec<(Ipv4Addr, u16, String)>,
-) -> Vec<HostReport> {
-    // BTreeMap keeps reports ordered by host for stable output.
     let mut reports: BTreeMap<Ipv4Addr, HostReport> = BTreeMap::new();
+    let mut pending: usize = 0; // enrichment probes still in flight
+    let mut sweeping = true; // live sweep still running
 
-    for (host, port) in open_ports {
-        report_entry(&mut reports, host).open_ports.push(port);
-    }
-    for (host, ttl) in ttl_results {
-        report_entry(&mut reports, host).ttl = Some(ttl);
-    }
-    for (host, port, banner) in service_results {
-        report_entry(&mut reports, host)
-            .services
-            .push(Service { port, banner });
-    }
+    loop {
+        // Done once the sweep has finished and no enrichment is outstanding.
+        if !sweeping && pending == 0 {
+            break;
+        }
 
-    let mut reports: Vec<HostReport> = reports.into_values().collect();
-    for report in &mut reports {
-        report.open_ports.sort_unstable();
-        report.open_ports.dedup();
-        report
-            .services
-            .sort_by(|a, b| a.port.cmp(&b.port).then_with(|| a.banner.cmp(&b.banner)));
-        report.services.dedup_by(|a, b| a.port == b.port && a.banner == b.banner);
-    }
+        tokio::select! {
+            live = live_rx.recv(), if sweeping => match live {
+                Some((ip, port, true)) => {
+                    let first_sighting = !reports.contains_key(&ip);
+                    let report = reports.entry(ip).or_insert_with(|| empty_report(ip));
+                    insert_port(report, port);
+                    if tx.send(report.clone()).await.is_err() {
+                        return; // consumer hung up
+                    }
 
-    reports
+                    // Enrich on open ports only: TTL once per host, a banner per port.
+                    if first_sighting {
+                        pending += 1;
+                        spawn_ttl(ip, enrich_tx.clone());
+                    }
+                    pending += 1;
+                    spawn_service(ip, port, enrich_tx.clone());
+                }
+                Some(_) => {} // closed port
+                None => sweeping = false,
+            },
+            Some(result) = enrich_rx.recv() => {
+                pending -= 1;
+                if let Some(report) = apply_enrichment(&mut reports, result)
+                    && tx.send(report).await.is_err()
+                {
+                    return;
+                }
+            }
+        }
+    }
 }
 
-/// Get the report for `host`, creating an empty one on first sight.
-fn report_entry(
+/// Fold an enrichment result into its host's report, returning a fresh snapshot
+/// when it actually changed something.
+fn apply_enrichment(
     reports: &mut BTreeMap<Ipv4Addr, HostReport>,
-    host: Ipv4Addr,
-) -> &mut HostReport {
-    reports.entry(host).or_insert_with(|| HostReport {
+    result: Enrich,
+) -> Option<HostReport> {
+    match result {
+        Enrich::Ttl(ip, Some(ttl)) => {
+            let report = reports.get_mut(&ip)?;
+            report.ttl = Some(ttl);
+            Some(report.clone())
+        }
+        Enrich::Service(ip, port, Some(banner)) => {
+            let report = reports.get_mut(&ip)?;
+            insert_service(report, port, banner);
+            Some(report.clone())
+        }
+        // A probe that found nothing still counts toward `pending`; nothing to emit.
+        Enrich::Ttl(_, None) | Enrich::Service(_, _, None) => None,
+    }
+}
+
+fn spawn_ttl(ip: Ipv4Addr, enrich_tx: mpsc::Sender<Enrich>) {
+    tokio::spawn(async move {
+        let ttl = scans::ttl::probe(ip).await;
+        let _ = enrich_tx.send(Enrich::Ttl(ip, ttl)).await;
+    });
+}
+
+fn spawn_service(ip: Ipv4Addr, port: u16, enrich_tx: mpsc::Sender<Enrich>) {
+    tokio::spawn(async move {
+        let banner = scans::service::probe(ip, port).await;
+        let _ = enrich_tx.send(Enrich::Service(ip, port, banner)).await;
+    });
+}
+
+fn empty_report(host: Ipv4Addr) -> HostReport {
+    HostReport {
         host,
         ttl: None,
         open_ports: Vec::new(),
         services: Vec::new(),
-    })
+    }
+}
+
+/// Insert a port keeping `open_ports` sorted and deduplicated.
+fn insert_port(report: &mut HostReport, port: u16) {
+    if let Err(pos) = report.open_ports.binary_search(&port) {
+        report.open_ports.insert(pos, port);
+    }
+}
+
+/// Insert a service keeping `services` sorted by (port, banner) and deduplicated.
+fn insert_service(report: &mut HostReport, port: u16, banner: String) {
+    let found = report
+        .services
+        .binary_search_by(|s| s.port.cmp(&port).then_with(|| s.banner.as_str().cmp(&banner)));
+    if let Err(pos) = found {
+        report.services.insert(pos, Service { port, banner });
+    }
 }

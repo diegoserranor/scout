@@ -120,29 +120,33 @@ fn scope_preview(input: &str) -> Line<'static> {
     }
 }
 
-/// Inspect screen: spinner while probing, then the host report.
+/// Inspect screen: the host report, filling in live (spinner in the title while
+/// the scan runs).
 fn draw_inspect(frame: &mut Frame, app: &App, area: Rect) {
-    let block = Block::bordered().title("Inspect");
-    match &app.inspection {
-        Inspection::Running => {
-            frame.render_widget(
-                Paragraph::new(format!("{} Inspecting…", spinner(app))).block(block),
-                area,
-            );
-        }
-        Inspection::Done(None) => {
-            frame.render_widget(Paragraph::new("No open ports found.").block(block), area);
-        }
-        Inspection::Done(Some(report)) => {
-            frame.render_widget(Paragraph::new(report_lines(report)).block(block), area);
-        }
+    let (report, scanning) = match &app.inspection {
+        Inspection::Running(report) => (report.as_ref(), true),
+        Inspection::Done(report) => (report.as_ref(), false),
         Inspection::Failed(err) => {
-            frame.render_widget(
-                Paragraph::new(format!("Inspect failed: {err}")).block(block).red(),
-                area,
-            );
+            let widget = Paragraph::new(format!("Inspect failed: {err}"))
+                .block(Block::bordered().title("Inspect"))
+                .red();
+            frame.render_widget(widget, area);
+            return;
         }
-    }
+    };
+
+    let title = if scanning {
+        format!("{} Inspect", spinner(app))
+    } else {
+        "Inspect".to_string()
+    };
+    let block = Block::bordered().title(title);
+    let widget = match report {
+        Some(report) => Paragraph::new(report_lines(report)).block(block),
+        None if scanning => Paragraph::new(format!("{} Inspecting…", spinner(app))).block(block),
+        None => Paragraph::new("No open ports found.").block(block),
+    };
+    frame.render_widget(widget, area);
 }
 
 /// Render a host report as labelled lines.

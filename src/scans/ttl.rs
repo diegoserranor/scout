@@ -1,23 +1,9 @@
-use crate::jobs;
 use std::net::Ipv4Addr;
-use tokio::{process, sync::mpsc};
+use tokio::process;
 
-pub struct TTLScan {
-    targets: Vec<Ipv4Addr>,
-}
-
-impl TTLScan {
-    pub fn build(targets: Vec<Ipv4Addr>) -> Self {
-        Self { targets }
-    }
-
-    pub fn run(self) -> mpsc::Receiver<Option<(Ipv4Addr, u8)>> {
-        let runner = jobs::Runner::<Ipv4Addr, Option<(Ipv4Addr, u8)>>::build(self.targets);
-        runner.spawn(ttl)
-    }
-}
-
-async fn ttl(host: Ipv4Addr) -> Option<(Ipv4Addr, u8)> {
+/// Ping a host a few times and parse the TTL from the first reply, or `None` if
+/// it never answers.
+pub async fn probe(host: Ipv4Addr) -> Option<u8> {
     let output = process::Command::new("ping")
         .args(["-c", "5", "-W", "1", &host.to_string()])
         .output()
@@ -29,10 +15,7 @@ async fn ttl(host: Ipv4Addr) -> Option<(Ipv4Addr, u8)> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout
-        .lines()
-        .find_map(parse_ttl_from_line)
-        .map(|value| (host, value))
+    stdout.lines().find_map(parse_ttl_from_line)
 }
 
 fn parse_ttl_from_line(line: &str) -> Option<u8> {
