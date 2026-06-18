@@ -6,7 +6,7 @@ use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph, Row, Table};
 
-use super::app::{App, Inspection, PRESET_LABELS, Scan, Screen};
+use super::app::{App, Inspection, PRESET_LABELS, Scan, Screen, preset_hint};
 use crate::core::HostReport;
 
 /// Braille spinner frames cycled while a scan is running.
@@ -80,18 +80,16 @@ fn draw_discover(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// Scope screen: pick a port preset for the selected host.
 fn draw_scope(frame: &mut Frame, app: &App, area: Rect) {
-    let lines: Vec<Line> = PRESET_LABELS
-        .iter()
-        .enumerate()
-        .map(|(i, label)| {
-            let line = Line::from(format!(" {label}"));
-            if i == app.preset {
-                line.bold().reversed()
-            } else {
-                line
-            }
-        })
-        .collect();
+    let mut lines: Vec<Line> = Vec::with_capacity(PRESET_LABELS.len() * 2);
+    for (i, label) in PRESET_LABELS.iter().enumerate() {
+        let label_line = Line::from(format!(" {label}"));
+        lines.push(if i == app.preset {
+            label_line.bold().reversed()
+        } else {
+            label_line
+        });
+        lines.push(Line::from(format!("   {}", preset_hint(i))).dim());
+    }
     let widget = Paragraph::new(lines).block(Block::bordered().title("Scope — choose ports"));
     frame.render_widget(widget, area);
 }

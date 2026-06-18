@@ -27,6 +27,24 @@ fn preset_spec(index: usize) -> PortSpec {
     }
 }
 
+/// Human-readable summary of the ports a preset covers, for the Scope footnote.
+/// Derived from [`PortSpec::resolve`] so it can't drift from the core port lists.
+pub fn preset_hint(index: usize) -> String {
+    match preset_spec(index) {
+        PortSpec::All => "1-65535".to_string(),
+        spec => spec
+            .resolve()
+            .map(|ports| {
+                ports
+                    .iter()
+                    .map(|port| port.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default(),
+    }
+}
+
 /// Which screen of the flow is currently shown.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
