@@ -45,37 +45,46 @@ fn title(app: &App) -> String {
     }
 }
 
-/// Discover screen: spinner while scanning, then the live-host table.
+/// Discover screen: the live-host table, growing as results stream in (with a
+/// spinner in the title while the sweep runs).
 fn draw_discover(frame: &mut Frame, app: &mut App, area: Rect) {
-    match &app.discover {
-        Scan::Running => {
-            let widget = Paragraph::new(format!("{} Discovering live hosts…", spinner(app)))
-                .block(Block::bordered().title("Discover"));
-            frame.render_widget(widget, area);
-        }
-        Scan::Done(hosts) if hosts.is_empty() => {
-            let widget = Paragraph::new("No live hosts found on local networks.")
-                .block(Block::bordered().title("Discover"));
-            frame.render_widget(widget, area);
-        }
-        Scan::Done(hosts) => {
-            let rows = hosts
-                .iter()
-                .map(|host| Row::new(vec![host.ip.to_string(), host.subnet.to_string()]));
-            let table = Table::new(rows, [Constraint::Length(18), Constraint::Min(10)])
-                .header(Row::new(vec!["Host", "Subnet"]).bold())
-                .block(Block::bordered().title(format!("Discover — {} live", hosts.len())))
-                .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED))
-                .highlight_symbol("› ");
-            frame.render_stateful_widget(table, area, &mut app.host_list);
-        }
+    let (hosts, scanning) = match &app.discover {
+        Scan::Running(hosts) => (hosts, true),
+        Scan::Done(hosts) => (hosts, false),
         Scan::Failed(err) => {
             let widget = Paragraph::new(format!("Discover failed: {err}"))
                 .block(Block::bordered().title("Discover"))
                 .red();
             frame.render_widget(widget, area);
+            return;
         }
+    };
+
+    if hosts.is_empty() {
+        let body = if scanning {
+            format!("{} Discovering live hosts…", spinner(app))
+        } else {
+            "No live hosts found on local networks.".to_string()
+        };
+        let widget = Paragraph::new(body).block(Block::bordered().title("Discover"));
+        frame.render_widget(widget, area);
+        return;
     }
+
+    let title = if scanning {
+        format!("{} Discover — {} live", spinner(app), hosts.len())
+    } else {
+        format!("Discover — {} live", hosts.len())
+    };
+    let rows = hosts
+        .iter()
+        .map(|host| Row::new(vec![host.ip.to_string(), host.subnet.to_string()]));
+    let table = Table::new(rows, [Constraint::Length(18), Constraint::Min(10)])
+        .header(Row::new(vec!["Host", "Subnet"]).bold())
+        .block(Block::bordered().title(title))
+        .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED))
+        .highlight_symbol("› ");
+    frame.render_stateful_widget(table, area, &mut app.host_list);
 }
 
 /// Scope screen: pick a port preset for the selected host.
@@ -173,7 +182,7 @@ fn spinner(app: &App) -> &'static str {
 fn footer_hints(app: &App) -> &'static str {
     match app.screen {
         Screen::Discover => match &app.discover {
-            Scan::Done(hosts) if !hosts.is_empty() => {
+            Scan::Running(hosts) | Scan::Done(hosts) if !hosts.is_empty() => {
                 "↑/↓ navigate    enter: scope    q: quit"
             }
             _ => "q: quit",

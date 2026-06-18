@@ -30,8 +30,14 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
 
 /// `scout discover` — list the live hosts on the local networks.
 async fn discover() -> Result<(), Box<dyn Error>> {
+    let mut rx = core::discover()?;
+
     let bar = console::spinner("Discovering live hosts...");
-    let hosts = core::discover().await?;
+    let mut hosts: Vec<Host> = Vec::new();
+    while let Some(host) = rx.recv().await {
+        hosts.push(host);
+        bar.set_message(format!("Discovering live hosts... {} found", hosts.len()));
+    }
     bar.finish_and_clear();
 
     if hosts.is_empty() {
@@ -39,6 +45,8 @@ async fn discover() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
+    // Hosts stream in completion order; sort for stable, readable output.
+    hosts.sort_by_key(|host| host.ip);
     println!("\n{}", host_table(&hosts));
     Ok(())
 }

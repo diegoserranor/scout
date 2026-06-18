@@ -62,9 +62,10 @@ pub enum Screen {
     Inspect,
 }
 
-/// State of the background discover scan.
+/// State of the background discover scan. `Running` carries the hosts found so
+/// far, so the list renders and grows live as results stream in.
 pub enum Scan {
-    Running,
+    Running(Vec<Host>),
     Done(Vec<Host>),
     Failed(String),
 }
@@ -105,7 +106,7 @@ impl App {
     pub fn new() -> Self {
         Self {
             screen: Screen::Discover,
-            discover: Scan::Running,
+            discover: Scan::Running(Vec::new()),
             host_list: TableState::default(),
             target: None,
             preset: 0,
@@ -119,11 +120,15 @@ impl App {
 
     /// Run the event loop until the user quits, redrawing on every wake-up.
     pub async fn run(mut self, terminal: &mut DefaultTerminal) -> Result<(), Box<dyn Error>> {
-        // Kick off discover as a task. Map its error to a String so the task's
-        // output is `Send` (the core error is a bare `Box<dyn Error>`).
-        let mut discover_task =
-            tokio::spawn(async move { core::discover().await.map_err(|e| e.to_string()) });
-        let mut discover_done = false;
+        // Start discover; core spawns the sweep and streams live hosts back. Setup
+        // errors surface synchronously, so a failure shows immediately.
+        let mut discover_rx = match core::discover() {
+            Ok(rx) => Some(rx),
+            Err(err) => {
+                self.discover = Scan::Failed(err.to_string());
+                None
+            }
+        };
 
         // Inspect runs on demand once the user picks a host + preset.
         let mut inspect_task: Option<JoinHandle<Result<Option<HostReport>, String>>> = None;
@@ -152,18 +157,17 @@ impl App {
                     }
                 }
                 _ = ticker.tick() => self.spinner_frame = self.spinner_frame.wrapping_add(1),
-                result = &mut discover_task, if !discover_done => {
-                    discover_done = true;
-                    self.discover = match result {
-                        Ok(Ok(hosts)) => {
-                            if !hosts.is_empty() {
-                                self.host_list.select(Some(0));
+                host = async { discover_rx.as_mut().unwrap().recv().await }, if discover_rx.is_some() => {
+                    match host {
+                        Some(host) => self.push_discovered(host),
+                        // Channel closed: the sweep finished.
+                        None => {
+                            discover_rx = None;
+                            if let Scan::Running(hosts) = &mut self.discover {
+                                self.discover = Scan::Done(std::mem::take(hosts));
                             }
-                            Scan::Done(hosts)
                         }
-                        Ok(Err(err)) => Scan::Failed(err),
-                        Err(err) => Scan::Failed(format!("scan task failed: {err}")),
-                    };
+                    }
                 }
                 result = async { inspect_task.as_mut().unwrap().await }, if inspect_task.is_some() => {
                     inspect_task = None;
@@ -292,20 +296,34 @@ impl App {
         }
     }
 
+    /// Record a host streamed in from the discover sweep, selecting the first
+    /// row as soon as one arrives.
+    fn push_discovered(&mut self, host: Host) {
+        if let Scan::Running(hosts) = &mut self.discover {
+            if hosts.is_empty() {
+                self.host_list.select(Some(0));
+            }
+            hosts.push(host);
+        }
+    }
+
+    /// The discovered hosts found so far, whether the sweep is still running or done.
+    fn discovered_hosts(&self) -> &[Host] {
+        match &self.discover {
+            Scan::Running(hosts) | Scan::Done(hosts) => hosts,
+            Scan::Failed(_) => &[],
+        }
+    }
+
     /// The host currently highlighted in the discovered list, if any.
     fn selected_host(&self) -> Option<Host> {
-        let Scan::Done(hosts) = &self.discover else {
-            return None;
-        };
+        let hosts = self.discovered_hosts();
         self.host_list.selected().and_then(|i| hosts.get(i)).cloned()
     }
 
     /// Number of selectable rows in the discovered list.
     fn row_count(&self) -> usize {
-        match &self.discover {
-            Scan::Done(hosts) => hosts.len(),
-            _ => 0,
-        }
+        self.discovered_hosts().len()
     }
 
     fn select_next(&mut self) {
