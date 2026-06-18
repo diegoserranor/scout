@@ -2,6 +2,7 @@
 
 use std::error::Error;
 use std::net::Ipv4Addr;
+use std::str::FromStr;
 
 use super::types::{PortSpec, ScanPlan};
 
@@ -27,6 +28,35 @@ impl PortSpec {
         };
 
         Ok(ports)
+    }
+}
+
+impl FromStr for PortSpec {
+    type Err = Box<dyn Error>;
+
+    /// Parse a user-supplied port selection: a preset name (`web`/`common`/`all`),
+    /// a `start-end` range, or a comma-separated list (a bare number is a one-item
+    /// list). Range ordering is validated later, in [`PortSpec::resolve`].
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let raw = raw.trim();
+        match raw.to_ascii_lowercase().as_str() {
+            "web" => Ok(PortSpec::Web),
+            "common" => Ok(PortSpec::Common),
+            "all" => Ok(PortSpec::All),
+            _ => {
+                if let Some((start, end)) = raw.split_once('-') {
+                    Ok(PortSpec::Range(start.trim().parse()?, end.trim().parse()?))
+                } else if raw.contains(',') {
+                    let list = raw
+                        .split(',')
+                        .map(|port| port.trim().parse::<u16>())
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(PortSpec::List(list))
+                } else {
+                    Ok(PortSpec::List(vec![raw.parse()?]))
+                }
+            }
+        }
     }
 }
 

@@ -6,8 +6,8 @@ use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph, Row, Table};
 
-use super::app::{App, Inspection, PRESET_LABELS, Scan, Screen, preset_hint};
-use crate::core::HostReport;
+use super::app::{App, CUSTOM_PRESET, Inspection, PRESET_LABELS, Scan, Screen, preset_hint};
+use crate::core::{HostReport, PortSpec};
 
 /// Braille spinner frames cycled while a scan is running.
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -88,10 +88,27 @@ fn draw_scope(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             label_line
         });
-        lines.push(Line::from(format!("   {}", preset_hint(i))).dim());
+        if i == CUSTOM_PRESET && app.editing {
+            // The Custom row swaps its footnote for the live input and a parse preview.
+            lines.push(Line::from(format!("   > {}_", app.port_input)));
+            lines.push(scope_preview(&app.port_input));
+        } else {
+            lines.push(Line::from(format!("   {}", preset_hint(i))).dim());
+        }
     }
     let widget = Paragraph::new(lines).block(Block::bordered().title("Scope — choose ports"));
     frame.render_widget(widget, area);
+}
+
+/// A preview line for the Custom input: the resolved port count, or the parse error.
+fn scope_preview(input: &str) -> Line<'static> {
+    if input.trim().is_empty() {
+        return Line::from("   type ports, then enter").dim();
+    }
+    match input.parse::<PortSpec>().and_then(|spec| spec.resolve()) {
+        Ok(ports) => Line::from(format!("   → {} port(s)", ports.len())).dim(),
+        Err(err) => Line::from(format!("   ✗ {err}")).red(),
+    }
 }
 
 /// Inspect screen: spinner while probing, then the host report.
@@ -161,7 +178,8 @@ fn footer_hints(app: &App) -> &'static str {
             }
             _ => "q: quit",
         },
-        Screen::Scope => "↑/↓ choose    enter: inspect    esc: back    q: quit",
+        Screen::Scope if app.editing => "type ports    enter: inspect    esc: cancel",
+        Screen::Scope => "↑/↓ choose    enter: select    esc: back    q: quit",
         Screen::Inspect => "esc: back    q: quit",
     }
 }

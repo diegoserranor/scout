@@ -78,28 +78,9 @@ fn parse_target(target: &str) -> Result<Vec<Ipv4Addr>, Box<dyn Error>> {
 
 /// Parse the `--ports` value into a [`PortSpec`]; defaults to the common set.
 fn parse_port_spec(ports: Option<String>) -> Result<PortSpec, Box<dyn Error>> {
-    let Some(raw) = ports else {
-        return Ok(PortSpec::Common);
-    };
-    let raw = raw.trim();
-
-    match raw.to_ascii_lowercase().as_str() {
-        "web" => Ok(PortSpec::Web),
-        "common" => Ok(PortSpec::Common),
-        "all" => Ok(PortSpec::All),
-        _ => {
-            if let Some((start, end)) = raw.split_once('-') {
-                Ok(PortSpec::Range(start.trim().parse()?, end.trim().parse()?))
-            } else if raw.contains(',') {
-                let list = raw
-                    .split(',')
-                    .map(|port| port.trim().parse::<u16>())
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(PortSpec::List(list))
-            } else {
-                Ok(PortSpec::List(vec![raw.parse()?]))
-            }
-        }
+    match ports {
+        Some(raw) => raw.parse(),
+        None => Ok(PortSpec::Common),
     }
 }
 

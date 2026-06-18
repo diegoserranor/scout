@@ -15,10 +15,15 @@ use crate::core::{self, Host, HostReport, PortSpec};
 /// How often the loop wakes to advance the spinner (and otherwise idle-redraw).
 const SPINNER_TICK: Duration = Duration::from_millis(100);
 
-/// Port presets offered on the Scope screen, in display order.
-pub const PRESET_LABELS: [&str; 3] = ["Web", "Common", "All"];
+/// Port presets offered on the Scope screen, in display order. The last entry is
+/// the free-text [`CUSTOM_PRESET`], which opens an input field instead of a fixed spec.
+pub const PRESET_LABELS: [&str; 4] = ["Web", "Common", "All", "Custom"];
 
-/// The [`PortSpec`] for a preset index (clamped to [`PortSpec::All`]).
+/// Index of the free-text "Custom" entry in [`PRESET_LABELS`].
+pub const CUSTOM_PRESET: usize = 3;
+
+/// The [`PortSpec`] for a fixed preset index. Not valid for [`CUSTOM_PRESET`],
+/// whose spec is parsed from user input instead.
 fn preset_spec(index: usize) -> PortSpec {
     match index {
         0 => PortSpec::Web,
@@ -28,20 +33,24 @@ fn preset_spec(index: usize) -> PortSpec {
 }
 
 /// Human-readable summary of the ports a preset covers, for the Scope footnote.
-/// Derived from [`PortSpec::resolve`] so it can't drift from the core port lists.
+/// The fixed presets derive from [`PortSpec::resolve`] so they can't drift from
+/// the core port lists; Custom shows an input example.
 pub fn preset_hint(index: usize) -> String {
-    match preset_spec(index) {
-        PortSpec::All => "1-65535".to_string(),
-        spec => spec
-            .resolve()
-            .map(|ports| {
-                ports
-                    .iter()
-                    .map(|port| port.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_default(),
+    match index {
+        CUSTOM_PRESET => "e.g. 1-100 or 22,80,443".to_string(),
+        _ => match preset_spec(index) {
+            PortSpec::All => "1-65535".to_string(),
+            spec => spec
+                .resolve()
+                .map(|ports| {
+                    ports
+                        .iter()
+                        .map(|port| port.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default(),
+        },
     }
 }
 
@@ -83,6 +92,10 @@ pub struct App {
     pub target: Option<Host>,
     /// Selected preset index on the Scope screen.
     pub preset: usize,
+    /// Whether the Custom preset's free-text input is currently capturing keys.
+    pub editing: bool,
+    /// Buffer backing the Custom port input.
+    pub port_input: String,
     pub inspection: Inspection,
     pub spinner_frame: usize,
     should_quit: bool,
@@ -96,6 +109,8 @@ impl App {
             host_list: TableState::default(),
             target: None,
             preset: 0,
+            editing: false,
+            port_input: String::new(),
             inspection: Inspection::Running,
             spinner_frame: 0,
             should_quit: false,
@@ -177,10 +192,11 @@ impl App {
             return Action::None;
         }
 
-        // `q` / Ctrl-C quit from any screen.
+        // Ctrl-C quits from anywhere; bare `q` quits too, except while typing a
+        // custom port spec (where it's just a character).
         let ctrl_c =
             key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
-        if key.code == KeyCode::Char('q') || ctrl_c {
+        if ctrl_c || (key.code == KeyCode::Char('q') && !self.editing) {
             self.should_quit = true;
             return Action::None;
         }
@@ -201,6 +217,7 @@ impl App {
                 if let Some(host) = self.selected_host() {
                     self.target = Some(host);
                     self.preset = 0;
+                    self.editing = false;
                     self.screen = Screen::Scope;
                 }
             }
@@ -209,6 +226,9 @@ impl App {
     }
 
     fn on_scope_key(&mut self, code: KeyCode) -> Action {
+        if self.editing {
+            return self.on_custom_key(code);
+        }
         match code {
             KeyCode::Up | KeyCode::Char('k') | KeyCode::Left => {
                 self.preset = self.preset.saturating_sub(1);
@@ -217,19 +237,52 @@ impl App {
                 self.preset = (self.preset + 1).min(PRESET_LABELS.len() - 1);
             }
             KeyCode::Esc => self.screen = Screen::Discover,
+            KeyCode::Enter => return self.confirm_scope(),
+            _ => {}
+        }
+        Action::None
+    }
+
+    /// Enter pressed on the preset menu: open the input for Custom, otherwise
+    /// inspect the target with the chosen preset.
+    fn confirm_scope(&mut self) -> Action {
+        if self.preset == CUSTOM_PRESET {
+            self.editing = true;
+            return Action::None;
+        }
+        self.start_inspect(preset_spec(self.preset))
+    }
+
+    /// Handle a key while the Custom port input is capturing. Enter inspects when
+    /// the buffer parses; a parse error keeps the user in the input (the preview
+    /// shows why). Esc returns to the preset menu.
+    fn on_custom_key(&mut self, code: KeyCode) -> Action {
+        match code {
+            KeyCode::Char(c) => self.port_input.push(c),
+            KeyCode::Backspace => {
+                self.port_input.pop();
+            }
+            KeyCode::Esc => self.editing = false,
             KeyCode::Enter => {
-                if let Some(host) = self.target.clone() {
-                    self.screen = Screen::Inspect;
-                    self.inspection = Inspection::Running;
-                    return Action::Inspect {
-                        host,
-                        spec: preset_spec(self.preset),
-                    };
+                if let Ok(spec) = self.port_input.parse::<PortSpec>() {
+                    self.editing = false;
+                    return self.start_inspect(spec);
                 }
-                self.screen = Screen::Discover;
             }
             _ => {}
         }
+        Action::None
+    }
+
+    /// Move to the Inspect screen and ask the loop to run the scan, or fall back
+    /// to Discover if the target was somehow lost.
+    fn start_inspect(&mut self, spec: PortSpec) -> Action {
+        if let Some(host) = self.target.clone() {
+            self.screen = Screen::Inspect;
+            self.inspection = Inspection::Running;
+            return Action::Inspect { host, spec };
+        }
+        self.screen = Screen::Discover;
         Action::None
     }
 
