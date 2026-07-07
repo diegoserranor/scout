@@ -7,7 +7,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph, Row, Table};
 
 use super::app::{App, CUSTOM_PRESET, Inspection, PRESET_LABELS, Scan, Screen, preset_hint};
-use crate::core::{HostReport, PortSpec};
+use crate::core::{Confidence, HostReport, PortSpec, Service};
 
 /// Braille spinner frames cycled while a scan is running.
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -155,6 +155,11 @@ fn report_lines(report: &HostReport) -> Vec<Line<'static>> {
         .ttl
         .map(|ttl| ttl.to_string())
         .unwrap_or_else(|| "-".to_string());
+    let os = report
+        .os
+        .as_ref()
+        .map(|os| format!("{} ({})", os.family.label(), os.confidence.label()))
+        .unwrap_or_else(|| "-".to_string());
     let ports = report
         .open_ports
         .iter()
@@ -164,6 +169,7 @@ fn report_lines(report: &HostReport) -> Vec<Line<'static>> {
 
     let mut lines = vec![
         Line::from(format!("TTL:        {ttl}")),
+        Line::from(format!("OS:         {os}")),
         Line::from(format!("Open ports: {ports}")),
         Line::from("Services:"),
     ];
@@ -171,13 +177,40 @@ fn report_lines(report: &HostReport) -> Vec<Line<'static>> {
         lines.push(Line::from("  -"));
     } else {
         for service in &report.services {
-            lines.push(Line::from(format!(
-                "  {}: {}",
-                service.port, service.banner
-            )));
+            lines.push(Line::from(format!("  {}", service_line(service))));
         }
     }
     lines
+}
+
+/// One service line: the parsed `name product/version` when identified,
+/// otherwise the raw banner.
+fn service_line(service: &Service) -> String {
+    match service_identity(service) {
+        Some(identity) => format!("{}: {}", service.port, identity),
+        None => format!("{}: {}", service.port, service.banner),
+    }
+}
+
+/// Assemble `name product/version` from a service, or `None` when no product
+/// was recovered from the banner.
+fn service_identity(service: &Service) -> Option<String> {
+    let product = service.product.as_ref()?;
+    let mut identity = String::new();
+    if let Some(name) = &service.name {
+        identity.push_str(name);
+        identity.push(' ');
+    }
+    identity.push_str(product);
+    if let Some(version) = &service.version {
+        identity.push('/');
+        identity.push_str(version);
+    }
+    // Flag identifications we are less sure of (e.g. product but no version).
+    if service.confidence != Confidence::High {
+        identity.push_str(&format!(" ({})", service.confidence.label()));
+    }
+    Some(identity)
 }
 
 /// The current spinner frame.

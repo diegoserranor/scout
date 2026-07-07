@@ -6,6 +6,7 @@ use std::net::Ipv4Addr;
 
 use tokio::sync::mpsc;
 
+use super::fingerprint;
 use super::types::{HostReport, ScanPlan, Service};
 use crate::scans;
 
@@ -94,11 +95,13 @@ fn apply_enrichment(
         Enrich::Ttl(ip, Some(ttl)) => {
             let report = reports.get_mut(&ip)?;
             report.ttl = Some(ttl);
+            report.os = fingerprint::guess_os(report.ttl, &report.services);
             Some(report.clone())
         }
         Enrich::Service(ip, port, Some(banner)) => {
             let report = reports.get_mut(&ip)?;
-            insert_service(report, port, banner);
+            insert_service(report, fingerprint::parse_service(port, &banner));
+            report.os = fingerprint::guess_os(report.ttl, &report.services);
             Some(report.clone())
         }
         // A probe that found nothing still counts toward `pending`; nothing to emit.
@@ -124,6 +127,7 @@ fn empty_report(host: Ipv4Addr) -> HostReport {
     HostReport {
         host,
         ttl: None,
+        os: None,
         open_ports: Vec::new(),
         services: Vec::new(),
     }
@@ -137,14 +141,14 @@ fn insert_port(report: &mut HostReport, port: u16) {
 }
 
 /// Insert a service keeping `services` sorted by (port, banner) and deduplicated.
-fn insert_service(report: &mut HostReport, port: u16, banner: String) {
+fn insert_service(report: &mut HostReport, service: Service) {
     let found = report.services.binary_search_by(|s| {
         s.port
-            .cmp(&port)
-            .then_with(|| s.banner.as_str().cmp(&banner))
+            .cmp(&service.port)
+            .then_with(|| s.banner.cmp(&service.banner))
     });
     if let Err(pos) = found {
-        report.services.insert(pos, Service { port, banner });
+        report.services.insert(pos, service);
     }
 }
 
@@ -166,12 +170,16 @@ mod tests {
         assert_eq!(report.open_ports, vec![22, 80, 443]);
     }
 
+    fn svc(port: u16, banner: &str) -> Service {
+        fingerprint::parse_service(port, banner)
+    }
+
     #[test]
     fn insert_service_sorts_by_port_then_banner() {
         let mut report = empty_report(ip());
-        insert_service(&mut report, 80, "nginx".to_string());
-        insert_service(&mut report, 22, "OpenSSH".to_string());
-        insert_service(&mut report, 80, "apache".to_string());
+        insert_service(&mut report, svc(80, "nginx"));
+        insert_service(&mut report, svc(22, "OpenSSH"));
+        insert_service(&mut report, svc(80, "apache"));
         let ordered: Vec<_> = report
             .services
             .iter()
@@ -186,8 +194,8 @@ mod tests {
     #[test]
     fn insert_service_deduplicates_identical_entries() {
         let mut report = empty_report(ip());
-        insert_service(&mut report, 80, "nginx".to_string());
-        insert_service(&mut report, 80, "nginx".to_string());
+        insert_service(&mut report, svc(80, "nginx"));
+        insert_service(&mut report, svc(80, "nginx"));
         assert_eq!(report.services.len(), 1);
     }
 

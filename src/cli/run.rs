@@ -13,7 +13,7 @@ use comfy_table::{ContentArrangement, Table};
 
 use super::args::{Cli, Commands};
 use super::console::{self, OUTPUT_WIDTH};
-use crate::core::{self, Host, HostReport, PortSpec, Service};
+use crate::core::{self, Confidence, Host, HostReport, OsGuess, PortSpec, Service};
 
 /// Dispatch the parsed CLI to the appropriate stage.
 pub async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
@@ -116,7 +116,7 @@ fn host_table(hosts: &[Host]) -> Table {
 /// Render inspection reports as a table.
 fn report_table(reports: &[HostReport]) -> Table {
     let mut table = base_table();
-    table.set_header(vec!["Host", "Ping TTL", "Open ports", "Services"]);
+    table.set_header(vec!["Host", "Ping TTL", "OS", "Open ports", "Services"]);
     for report in reports {
         let ttl = report
             .ttl
@@ -125,11 +125,20 @@ fn report_table(reports: &[HostReport]) -> Table {
         table.add_row(vec![
             report.host.to_string(),
             ttl,
+            format_os(report.os.as_ref()),
             format_ports(&report.open_ports),
             format_services(&report.services),
         ]);
     }
     table
+}
+
+/// Render an OS guess as `family (confidence)`, or `-` when unknown.
+fn format_os(os: Option<&OsGuess>) -> String {
+    match os {
+        Some(os) => format!("{} ({})", os.family.label(), os.confidence.label()),
+        None => "-".to_string(),
+    }
 }
 
 /// A table preconfigured with the shared scout styling.
@@ -158,7 +167,37 @@ fn format_services(services: &[Service]) -> String {
 
     services
         .iter()
-        .map(|service| format!("{}: {}", service.port, service.banner))
+        .map(format_service)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// One service line: the parsed `name product/version` when identified,
+/// otherwise the raw banner so nothing is hidden.
+fn format_service(service: &Service) -> String {
+    match service_identity(service) {
+        Some(identity) => format!("{}: {}", service.port, identity),
+        None => format!("{}: {}", service.port, service.banner),
+    }
+}
+
+/// Assemble `name product/version` from a service, or `None` when no product
+/// was recovered from the banner.
+fn service_identity(service: &Service) -> Option<String> {
+    let product = service.product.as_ref()?;
+    let mut identity = String::new();
+    if let Some(name) = &service.name {
+        identity.push_str(name);
+        identity.push(' ');
+    }
+    identity.push_str(product);
+    if let Some(version) = &service.version {
+        identity.push('/');
+        identity.push_str(version);
+    }
+    // Flag identifications we are less sure of (e.g. product but no version).
+    if service.confidence != Confidence::High {
+        identity.push_str(&format!(" ({})", service.confidence.label()));
+    }
+    Some(identity)
 }
