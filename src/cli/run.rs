@@ -66,7 +66,10 @@ async fn inspect(target: String, ports: Option<String>) -> Result<(), Box<dyn Er
     let mut reports: BTreeMap<Ipv4Addr, HostReport> = BTreeMap::new();
     while let Some(report) = rx.recv().await {
         reports.insert(report.host, report);
-        bar.set_message(format!("Inspecting targets... {} host(s) responding", reports.len()));
+        bar.set_message(format!(
+            "Inspecting targets... {} host(s) responding",
+            reports.len()
+        ));
     }
     bar.finish_and_clear();
 

@@ -171,7 +171,10 @@ fn report_lines(report: &HostReport) -> Vec<Line<'static>> {
         lines.push(Line::from("  -"));
     } else {
         for service in &report.services {
-            lines.push(Line::from(format!("  {}: {}", service.port, service.banner)));
+            lines.push(Line::from(format!(
+                "  {}: {}",
+                service.port, service.banner
+            )));
         }
     }
     lines

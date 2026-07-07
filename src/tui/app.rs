@@ -335,7 +335,10 @@ impl App {
     /// The host currently highlighted in the discovered list, if any.
     fn selected_host(&self) -> Option<Host> {
         let hosts = self.discovered_hosts();
-        self.host_list.selected().and_then(|i| hosts.get(i)).cloned()
+        self.host_list
+            .selected()
+            .and_then(|i| hosts.get(i))
+            .cloned()
     }
 
     /// Number of selectable rows in the discovered list.
@@ -348,7 +351,10 @@ impl App {
         if count == 0 {
             return;
         }
-        let next = self.host_list.selected().map_or(0, |i| (i + 1).min(count - 1));
+        let next = self
+            .host_list
+            .selected()
+            .map_or(0, |i| (i + 1).min(count - 1));
         self.host_list.select(Some(next));
     }
 

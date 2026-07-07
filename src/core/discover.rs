@@ -38,8 +38,10 @@ pub fn discover() -> Result<mpsc::Receiver<Host>, Box<dyn Error>> {
 
     // Keep each candidate's subnet so we can rebuild its `Host` from the live
     // scan's bare (ip, port) results.
-    let subnet_by_ip: HashMap<Ipv4Addr, _> =
-        candidates.iter().map(|host| (host.ip, host.subnet)).collect();
+    let subnet_by_ip: HashMap<Ipv4Addr, _> = candidates
+        .iter()
+        .map(|host| (host.ip, host.subnet))
+        .collect();
     let ips: Vec<Ipv4Addr> = candidates.iter().map(|host| host.ip).collect();
     let targets = live::build_live_targets(ips, LIVENESS_PORTS.to_vec())?;
 

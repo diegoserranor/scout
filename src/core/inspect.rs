@@ -138,9 +138,11 @@ fn insert_port(report: &mut HostReport, port: u16) {
 
 /// Insert a service keeping `services` sorted by (port, banner) and deduplicated.
 fn insert_service(report: &mut HostReport, port: u16, banner: String) {
-    let found = report
-        .services
-        .binary_search_by(|s| s.port.cmp(&port).then_with(|| s.banner.as_str().cmp(&banner)));
+    let found = report.services.binary_search_by(|s| {
+        s.port
+            .cmp(&port)
+            .then_with(|| s.banner.as_str().cmp(&banner))
+    });
     if let Err(pos) = found {
         report.services.insert(pos, Service { port, banner });
     }
