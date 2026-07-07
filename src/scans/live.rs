@@ -49,3 +49,46 @@ async fn scan(host: Ipv4Addr, port: u16) -> LiveResult {
         .is_some();
     (host, port, open)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ip(last: u8) -> Ipv4Addr {
+        Ipv4Addr::new(192, 168, 1, last)
+    }
+
+    #[test]
+    fn cartesian_product_is_host_major() {
+        let hosts = vec![ip(1), ip(2)];
+        let ports = vec![80, 443, 8080];
+        let targets = build_live_targets(hosts, ports).unwrap();
+        assert_eq!(
+            targets,
+            vec![
+                (ip(1), 80),
+                (ip(1), 443),
+                (ip(1), 8080),
+                (ip(2), 80),
+                (ip(2), 443),
+                (ip(2), 8080),
+            ]
+        );
+    }
+
+    #[test]
+    fn single_host_single_port() {
+        let targets = build_live_targets(vec![ip(50)], vec![22]).unwrap();
+        assert_eq!(targets, vec![(ip(50), 22)]);
+    }
+
+    #[test]
+    fn empty_inputs_yield_no_targets() {
+        assert!(build_live_targets(vec![], vec![80]).unwrap().is_empty());
+        assert!(build_live_targets(vec![ip(1)], vec![]).unwrap().is_empty());
+    }
+
+    // NOTE: the `checked_mul` overflow guard in `build_live_targets` is
+    // intentionally left uncovered — triggering it would require allocating
+    // vectors large enough to overflow `usize`.
+}

@@ -27,21 +27,26 @@ async fn http_banner(ip: Ipv4Addr, port: u16) -> Option<String> {
         return None;
     }
 
-    let data = String::from_utf8_lossy(&buf[..read]);
+    parse_http_response(&String::from_utf8_lossy(&buf[..read]))
+}
+
+/// Extract a banner from an HTTP response: the status line, optionally joined with
+/// the `Server:` header as `"{status} | {header}"`. `None` on empty input.
+fn parse_http_response(data: &str) -> Option<String> {
+    if data.is_empty() {
+        return None;
+    }
+
     let status_line = data.lines().next().unwrap_or("").to_string();
     let server_header = data
         .lines()
         .find(|line| line.to_ascii_lowercase().starts_with("server:"))
         .map(|line| line.to_string());
 
-    let service_str: String;
-    if let Some(header) = server_header {
-        service_str = format!("{status_line} | {header}");
-    } else {
-        service_str = status_line;
+    match server_header {
+        Some(header) => Some(format!("{status_line} | {header}")),
+        None => Some(status_line),
     }
-
-    Some(service_str)
 }
 
 async fn ssh_banner(ip: Ipv4Addr, port: u16) -> Option<String> {
@@ -53,10 +58,70 @@ async fn ssh_banner(ip: Ipv4Addr, port: u16) -> Option<String> {
         return None;
     }
 
-    let banner = String::from_utf8_lossy(&buf[..read]).trim().to_string();
+    parse_ssh_banner(&buf[..read])
+}
+
+/// Decode and trim an SSH identification banner; `None` if empty after trimming.
+fn parse_ssh_banner(bytes: &[u8]) -> Option<String> {
+    let banner = String::from_utf8_lossy(bytes).trim().to_string();
     if banner.is_empty() {
         None
     } else {
         Some(banner)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn http_status_line_only_when_no_server_header() {
+        let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n";
+        assert_eq!(
+            parse_http_response(response),
+            Some("HTTP/1.1 200 OK".to_string())
+        );
+    }
+
+    #[test]
+    fn http_joins_server_header() {
+        let response = "HTTP/1.1 200 OK\r\nServer: nginx/1.25\r\n\r\n";
+        assert_eq!(
+            parse_http_response(response),
+            Some("HTTP/1.1 200 OK | Server: nginx/1.25".to_string())
+        );
+    }
+
+    #[test]
+    fn http_server_header_match_is_case_insensitive() {
+        let response = "HTTP/1.1 404 Not Found\r\nSERVER: Apache\r\n\r\n";
+        assert_eq!(
+            parse_http_response(response),
+            Some("HTTP/1.1 404 Not Found | SERVER: Apache".to_string())
+        );
+    }
+
+    #[test]
+    fn http_empty_input_is_none() {
+        assert_eq!(parse_http_response(""), None);
+    }
+
+    #[test]
+    fn ssh_typical_banner_is_trimmed() {
+        assert_eq!(
+            parse_ssh_banner(b"SSH-2.0-OpenSSH_9.6\r\n"),
+            Some("SSH-2.0-OpenSSH_9.6".to_string())
+        );
+    }
+
+    #[test]
+    fn ssh_whitespace_only_is_none() {
+        assert_eq!(parse_ssh_banner(b"  \r\n\t"), None);
+    }
+
+    #[test]
+    fn ssh_empty_is_none() {
+        assert_eq!(parse_ssh_banner(b""), None);
     }
 }

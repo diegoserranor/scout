@@ -145,3 +145,83 @@ fn insert_service(report: &mut HostReport, port: u16, banner: String) {
         report.services.insert(pos, Service { port, banner });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ip() -> Ipv4Addr {
+        Ipv4Addr::new(10, 0, 0, 1)
+    }
+
+    #[test]
+    fn insert_port_keeps_sorted_and_deduplicated() {
+        let mut report = empty_report(ip());
+        insert_port(&mut report, 443);
+        insert_port(&mut report, 22);
+        insert_port(&mut report, 80);
+        insert_port(&mut report, 22); // duplicate is a no-op
+        assert_eq!(report.open_ports, vec![22, 80, 443]);
+    }
+
+    #[test]
+    fn insert_service_sorts_by_port_then_banner() {
+        let mut report = empty_report(ip());
+        insert_service(&mut report, 80, "nginx".to_string());
+        insert_service(&mut report, 22, "OpenSSH".to_string());
+        insert_service(&mut report, 80, "apache".to_string());
+        let ordered: Vec<_> = report
+            .services
+            .iter()
+            .map(|s| (s.port, s.banner.as_str()))
+            .collect();
+        assert_eq!(
+            ordered,
+            vec![(22, "OpenSSH"), (80, "apache"), (80, "nginx")]
+        );
+    }
+
+    #[test]
+    fn insert_service_deduplicates_identical_entries() {
+        let mut report = empty_report(ip());
+        insert_service(&mut report, 80, "nginx".to_string());
+        insert_service(&mut report, 80, "nginx".to_string());
+        assert_eq!(report.services.len(), 1);
+    }
+
+    #[test]
+    fn apply_enrichment_ttl_sets_and_returns_snapshot() {
+        let mut reports = BTreeMap::new();
+        reports.insert(ip(), empty_report(ip()));
+        let snapshot = apply_enrichment(&mut reports, Enrich::Ttl(ip(), Some(64)));
+        assert_eq!(snapshot.unwrap().ttl, Some(64));
+        assert_eq!(reports[&ip()].ttl, Some(64));
+    }
+
+    #[test]
+    fn apply_enrichment_service_adds_and_returns_snapshot() {
+        let mut reports = BTreeMap::new();
+        reports.insert(ip(), empty_report(ip()));
+        let snapshot = apply_enrichment(
+            &mut reports,
+            Enrich::Service(ip(), 22, Some("OpenSSH".to_string())),
+        );
+        let services = snapshot.unwrap().services;
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0].port, 22);
+    }
+
+    #[test]
+    fn apply_enrichment_none_results_emit_nothing() {
+        let mut reports = BTreeMap::new();
+        reports.insert(ip(), empty_report(ip()));
+        assert!(apply_enrichment(&mut reports, Enrich::Ttl(ip(), None)).is_none());
+        assert!(apply_enrichment(&mut reports, Enrich::Service(ip(), 22, None)).is_none());
+    }
+
+    #[test]
+    fn apply_enrichment_unknown_ip_emits_nothing() {
+        let mut reports: BTreeMap<Ipv4Addr, HostReport> = BTreeMap::new();
+        assert!(apply_enrichment(&mut reports, Enrich::Ttl(ip(), Some(64))).is_none());
+    }
+}
